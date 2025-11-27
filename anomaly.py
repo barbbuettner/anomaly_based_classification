@@ -134,16 +134,41 @@ class AnomalyEncoder():
       x_svd = svd.transform(x_prep)
     return x_svd
 
-  def train_encoder(self, X):
+  def train_encoder(self, X, y, dates):
     x_prep = self.preprocess(X)
-    x_anom = self.anomaly_scorer.fit_transform(X)
+    x_anom = self.anomaly_scorer.fit_transform(X, y, dates)
     encoder = MLPRegressor(hidden_layer_sizes=self.hidden_layer_sizes)
     encoder.fit(x_prep, x_anom)
     self.encoder = encoder
-    return x_prep, x_anom
+    return 
 
-  def train_approximate_scorer(self, x_prep, x_anom, hidden_layer_sizes=(128,)):
-    scorer_network = MLPRegressor(hidden_layer_sizes=hidden_layer_sizes)
-    scorer_network.fit(x_prep, x_anom)
-    self.approximate_scorer = scorer_network
-    
+  def forward_to_nth_layer(self, X, n=2):
+    x_prep = self.preprocess(X)
+    k = 0
+    while k < n:
+      x_prep = np.matmul(x_prep, self.encoder.coefs_[k]) + self.encoder.intercepts_[k]
+      if self.encoder.activation == 'identity':
+        x_prep = x_prep
+      elif self.encoder.activation == 'logistic':
+        x_prep = 1 / (1 + np.exp(x_prep))
+      elif self.encoder.actiation == 'tanh':
+        x_prep = np.tanh(x_prep)
+      else:
+        x_prep = np.maximum(x_prep, 0)
+      k += 1
+    return x_prep
+
+class AnomalyClassifier():
+  def __init__(self, anomaly_encoder):
+    self.classifier = RandomForestClassifier(class_weight='balanced', n_jobs=-1)
+    self.anomaly_encoder = anomaly_encoder
+
+  def train(self, X, y):
+    #train the classifier model on the latent representations of the encoder
+    x_bottleneck = self.anomaly_encoder.forward_to_nth_layer(X, 2)
+    self.classifier.fit(x_bottleneck, y)
+
+  def predict(self, X):
+    x_bottleneck = self.anomaly_encoder.forward_to_nth_layer(X, 2)
+    y_proba = self.classifier.predict_proba(x_bottleneck)[:, 1]
+    return y_proba
